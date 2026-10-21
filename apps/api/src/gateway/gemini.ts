@@ -42,7 +42,9 @@ export function geminiAdapter(
     async chat(req: ChatRequest): Promise<ChatResult> {
       const apiKey = process.env.GEMINI_GROUND_API_KEY;
       if (!apiKey) throw new Error("GEMINI_GROUND_API_KEY is not set");
-      const client = new OpenAI({ baseURL: BASE_URL, apiKey, timeout: 30_000 });
+      // 12s per id: the chain has 4 ids, so the whole chain fits inside
+      // the router's 60s budget even if the first ids hang.
+      const client = new OpenAI({ baseURL: BASE_URL, apiKey, timeout: 12_000 });
       const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] =
         [];
       if (req.system) messages.push({ role: "system", content: req.system });

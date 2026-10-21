@@ -19,12 +19,13 @@ import type {
 
 // Fallback router — blueprint section 3.
 // Try engines in order; on any error (429 / 5xx / timeout / empty reply)
-// move to the next one. A failed engine goes into a 10-minute cooldown and
-// is skipped while cooling down. Timeout per attempt: 30s (also set on the
-// OpenAI clients in the adapters).
+// move to the next one. Hard failures (429 / 5xx / auth) bench the engine
+// for 60s; a timeout does NOT bench it (slow ≠ broken — one latency spike
+// must not take a whole route down). Router budget per engine: 60s; the
+// Gemini adapter walks its id chain at 12s per id inside that budget.
 
-const TIMEOUT_MS = 30_000;
-const COOLDOWN_MS = 10 * 60_000;
+const TIMEOUT_MS = 60_000;
+const COOLDOWN_MS = 60_000;
 
 const cooldownUntil = new Map<string, number>();
 
@@ -120,7 +121,12 @@ export async function routeChat(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       errors.push(`${adapter.id}: ${msg}`);
-      cooldownUntil.set(adapter.id, Date.now() + COOLDOWN_MS);
+      // A timeout means "slow right now", not "broken" — do not bench the
+      // engine for it, or one latency spike takes the whole route down.
+      // Other failures (429 / 5xx / auth) get a short 60s cooldown.
+      if (!msg.startsWith("Timeout after")) {
+        cooldownUntil.set(adapter.id, Date.now() + COOLDOWN_MS);
+      }
     }
   }
   throw new Error(`All engines failed for ${model} — ${errors.join(" | ")}`);
