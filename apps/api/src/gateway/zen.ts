@@ -30,6 +30,9 @@ export function zenAdapter(model: string): EngineAdapter {
       const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] =
         [];
       if (req.system) messages.push({ role: "system", content: req.system });
+      for (const turn of req.history ?? []) {
+        messages.push({ role: turn.role, content: turn.content });
+      }
       messages.push({ role: "user", content: req.message });
       const res = await client.chat.completions.create({ model, messages });
       const reply = res.choices[0]?.message?.content ?? "";

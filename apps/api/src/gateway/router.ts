@@ -10,7 +10,12 @@ import {
   ZEN_DEEPSEEK_FLASH,
   ZEN_NEMOTRON_LIGHTNING,
 } from "./zen.js";
-import type { ChatResult, EngineAdapter, GncModelId } from "./types.js";
+import type {
+  ChatHistoryEntry,
+  ChatResult,
+  EngineAdapter,
+  GncModelId,
+} from "./types.js";
 
 // Fallback router — blueprint section 3.
 // Try engines in order; on any error (429 / 5xx / timeout / empty reply)
@@ -82,13 +87,22 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   ]);
 }
 
+export interface RouteChatOptions {
+  /** Prior conversation turns (oldest first) for multi-turn context. */
+  history?: ChatHistoryEntry[];
+  /** Extra instructions (e.g. recalled memories) appended to the model's system prompt. */
+  extraSystem?: string;
+}
+
 export async function routeChat(
   model: GncModelId,
   message: string,
+  opts: RouteChatOptions = {},
 ): Promise<ChatResult> {
   const adapters = ROUTES[model];
   if (!adapters) throw new Error(`Unknown GNC model: ${model as string}`);
-  const system = SYSTEM_PROMPTS[model];
+  let system = SYSTEM_PROMPTS[model];
+  if (opts.extraSystem) system = `${system}\n\n${opts.extraSystem}`;
   const errors: string[] = [];
 
   for (const adapter of adapters) {
@@ -98,7 +112,11 @@ export async function routeChat(
       continue;
     }
     try {
-      return await withTimeout(adapter.chat({ message, system }), TIMEOUT_MS, adapter.id);
+      return await withTimeout(
+        adapter.chat({ message, system, history: opts.history }),
+        TIMEOUT_MS,
+        adapter.id,
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       errors.push(`${adapter.id}: ${msg}`);

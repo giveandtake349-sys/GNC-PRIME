@@ -1,4 +1,17 @@
-import { useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
+import {
+  ApiError,
+  apiFetch,
+  clearToken,
+  getToken,
+  setToken,
+} from "./api";
 
 const MODELS = [
   { id: "gnc-1", label: "GNC-1" },
@@ -11,53 +24,176 @@ const MODELS = [
 
 type ModelId = (typeof MODELS)[number]["id"];
 
+interface UserInfo {
+  id: string;
+  email: string;
+  displayName: string | null;
+  plan: string;
+}
+
+interface AuthResponse {
+  token: string;
+  user: UserInfo;
+}
+
+interface ConversationSummary {
+  id: string;
+  title: string | null;
+  gnc_model: string;
+  updated_at: string;
+}
+
+interface StoredMessage {
+  id: string;
+  role: string;
+  content: string;
+  engine_used: string | null;
+  rating: number | null;
+  created_at: string;
+}
+
+interface ChatResponse {
+  reply: string;
+  engineUsed: string;
+  conversationId: string | null;
+  assistantMessageId: string | null;
+}
+
 interface Msg {
+  id?: string;
   role: "me" | "ai";
   text: string;
   who?: string;
   error?: boolean;
+  rating?: number | null;
 }
 
-export function App() {
-  const [model, setModel] = useState<ModelId>("gnc-1");
-  const [messages, setMessages] = useState<Msg[]>([]);
-  const [input, setInput] = useState("");
+function timeAgo(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const mins = Math.floor((Date.now() - then) / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+/* ------------------------------------------------------------------ */
+/* Google sign-in (only rendered when VITE_GOOGLE_CLIENT_ID is set)    */
+/* ------------------------------------------------------------------ */
+
+interface GoogleCredentialResponse {
+  credential?: string;
+}
+
+interface GoogleIdApi {
+  initialize: (cfg: {
+    client_id: string;
+    callback: (resp: GoogleCredentialResponse) => void;
+  }) => void;
+  renderButton: (el: HTMLElement, opts: Record<string, unknown>) => void;
+}
+
+declare global {
+  interface Window {
+    google?: { accounts: { id: GoogleIdApi } };
+  }
+}
+
+const GOOGLE_CLIENT_ID =
+  (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined) || undefined;
+
+/* ------------------------------------------------------------------ */
+/* Auth screen                                                         */
+/* ------------------------------------------------------------------ */
+
+function AuthScreen({ onAuthed }: { onAuthed: (token: string) => void }) {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [displayName, setDisplayName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const googleBtnRef = useRef<HTMLDivElement>(null);
 
-  const modelLabel = MODELS.find((m) => m.id === model)?.label ?? model;
+  const handleGoogle = useCallback(
+    async (resp: GoogleCredentialResponse) => {
+      if (!resp.credential) return;
+      setError("");
+      try {
+        const data = await apiFetch<AuthResponse>("/api/auth/google", {
+          body: { idToken: resp.credential },
+        });
+        onAuthed(data.token);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [onAuthed],
+  );
 
-  async function send() {
-    const text = input.trim();
-    if (!text || busy) return;
-    setInput("");
-    setBusy(true);
-    setMessages((prev) => [...prev, { role: "me", text, who: "You" }]);
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          // Dev-only auth bypass (API must run with DEV_AUTH=1 locally).
-          "x-dev-user": "dev",
-        },
-        body: JSON.stringify({ model, message: text }),
+  useEffect(() => {
+    if (!GOOGLE_CLIENT_ID) return;
+    const init = () => {
+      const idApi = window.google?.accounts?.id;
+      if (!idApi || !googleBtnRef.current) return;
+      idApi.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: (resp) => void handleGoogle(resp),
       });
-      const data = (await res.json()) as { reply?: string; error?: string };
-      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      setMessages((prev) => [
-        ...prev,
-        { role: "ai", text: data.reply ?? "", who: modelLabel },
-      ]);
+      idApi.renderButton(googleBtnRef.current, {
+        theme: "filled_black",
+        size: "large",
+        shape: "pill",
+        text: "signin_with",
+      });
+    };
+    if (window.google?.accounts?.id) {
+      init();
+      return;
+    }
+    const existing = document.querySelector<HTMLScriptElement>(
+      'script[src="https://accounts.google.com/gsi/client"]',
+    );
+    if (existing) {
+      existing.addEventListener("load", init);
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.onload = init;
+    document.head.appendChild(script);
+  }, [handleGoogle]);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const data = await apiFetch<AuthResponse>(
+        mode === "login" ? "/api/auth/login" : "/api/auth/register",
+        {
+          body:
+            mode === "login"
+              ? { email, password }
+              : {
+                  email,
+                  password,
+                  displayName: displayName.trim() || undefined,
+                },
+        },
+      );
+      onAuthed(data.token);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setMessages((prev) => [
-        ...prev,
-        { role: "ai", text: msg, who: modelLabel, error: true },
-      ]);
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
-      inputRef.current?.focus();
     }
   }
 
@@ -73,59 +209,379 @@ export function App() {
         </div>
       </header>
 
-      <div className="model-row">
-        <label htmlFor="model">Model</label>
-        <select
-          id="model"
-          value={model}
-          onChange={(e) => setModel(e.target.value as ModelId)}
-        >
-          {MODELS.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.label}
-            </option>
-          ))}
-        </select>
-      </div>
+      <div className="auth-card">
+        <h2>{mode === "login" ? "Welcome back" : "Create your account"}</h2>
+        <p className="auth-sub">
+          {mode === "login"
+            ? "Log in to pick up your chats — history and memory included."
+            : "One free account for every GNC model, with chat history and memory that remembers you."}
+        </p>
+        <form onSubmit={(e) => void submit(e)}>
+          {mode === "register" && (
+            <input
+              className="auth-input"
+              placeholder="Display name (optional)"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              autoComplete="name"
+            />
+          )}
+          <input
+            className="auth-input"
+            type="email"
+            placeholder="Email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="email"
+          />
+          <input
+            className="auth-input"
+            type="password"
+            placeholder="Password"
+            required
+            minLength={mode === "register" ? 8 : undefined}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
+          />
+          {error && <p className="auth-error">{error}</p>}
+          <button className="auth-submit" type="submit" disabled={busy}>
+            {busy
+              ? "Please wait…"
+              : mode === "login"
+                ? "Log in"
+                : "Create account"}
+          </button>
+        </form>
 
-      <div className="messages">
-        {messages.length === 0 && (
-          <p className="empty">
-            Pick a GNC model and say hello. GNC-1 is the flagship agent;
-            GNC-Flash is fast for everyday chat; GNC-Code is for coding.
-          </p>
+        {GOOGLE_CLIENT_ID && (
+          <>
+            <div className="auth-or">
+              <span>or</span>
+            </div>
+            <div className="google-slot" ref={googleBtnRef} />
+          </>
         )}
-        {messages.map((m, i) => (
-          <div
-            key={i}
-            className={`msg ${m.role}${m.error ? " error" : ""}`}
+
+        <p className="auth-toggle">
+          {mode === "login" ? "New to GNC Ground? " : "Already have an account? "}
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() => {
+              setMode(mode === "login" ? "register" : "login");
+              setError("");
+            }}
           >
-            <div className="who">{m.who}</div>
-            {m.text}
-          </div>
-        ))}
-        {busy && (
-          <div className="msg ai">
-            <div className="who">{modelLabel}</div>
-            Thinking…
-          </div>
-        )}
-      </div>
-
-      <div className="composer">
-        <input
-          ref={inputRef}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void send();
-          }}
-          placeholder="Ask GNC anything…"
-        />
-        <button className="send" onClick={() => void send()} disabled={busy}>
-          ↑
-        </button>
+            {mode === "login" ? "Create an account" : "Log in"}
+          </button>
+        </p>
       </div>
     </div>
   );
+}
+
+/* ------------------------------------------------------------------ */
+/* Chat screen                                                         */
+/* ------------------------------------------------------------------ */
+
+function ChatScreen({ onLogout }: { onLogout: () => void }) {
+  const [model, setModel] = useState<ModelId>("gnc-1");
+  const [messages, setMessages] = useState<Msg[]>([]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [me, setMe] = useState<UserInfo | null>(null);
+  const [conversations, setConversations] = useState<ConversationSummary[]>(
+    [],
+  );
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const modelLabel = MODELS.find((m) => m.id === model)?.label ?? model;
+
+  const refreshConversations = useCallback(async () => {
+    try {
+      const data = await apiFetch<{ conversations: ConversationSummary[] }>(
+        "/api/conversations",
+      );
+      setConversations(data.conversations);
+    } catch {
+      // List is best-effort; chat itself keeps working.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshConversations();
+  }, [refreshConversations]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await apiFetch<{ user: UserInfo }>("/api/auth/me");
+        if (!cancelled) setMe(data.user);
+      } catch (err) {
+        // Fail-soft for display purposes — but a 401 means the token is
+        // dead, so return to the auth screen.
+        if (err instanceof ApiError && err.status === 401) onLogout();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [onLogout]);
+
+  async function openConversation(conv: ConversationSummary) {
+    setSidebarOpen(false);
+    if (conv.id === activeId) return;
+    setActiveId(conv.id);
+    const convModel = MODELS.find((m) => m.id === conv.gnc_model);
+    if (convModel) setModel(convModel.id);
+    setMessages([]);
+    try {
+      const data = await apiFetch<{ messages: StoredMessage[] }>(
+        `/api/conversations/${conv.id}/messages`,
+      );
+      const label = convModel?.label ?? "GNC";
+      setMessages(
+        data.messages
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => ({
+            id: m.id,
+            role: m.role === "user" ? ("me" as const) : ("ai" as const),
+            text: m.content,
+            who: m.role === "user" ? "You" : label,
+            rating: m.rating,
+          })),
+      );
+    } catch (err) {
+      setMessages([
+        {
+          role: "ai",
+          text: err instanceof Error ? err.message : String(err),
+          who: "GNC",
+          error: true,
+        },
+      ]);
+    }
+  }
+
+  function newChat() {
+    setActiveId(null);
+    setMessages([]);
+    setSidebarOpen(false);
+    inputRef.current?.focus();
+  }
+
+  async function send() {
+    const text = input.trim();
+    if (!text || busy) return;
+    setInput("");
+    setBusy(true);
+    setMessages((prev) => [...prev, { role: "me", text, who: "You" }]);
+    try {
+      const data = await apiFetch<ChatResponse>("/api/chat", {
+        body: {
+          model,
+          message: text,
+          ...(activeId ? { conversationId: activeId } : {}),
+        },
+      });
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "ai",
+          id: data.assistantMessageId ?? undefined,
+          text: data.reply,
+          who: modelLabel,
+          rating: null,
+        },
+      ]);
+      if (!activeId && data.conversationId) {
+        setActiveId(data.conversationId);
+      }
+      void refreshConversations();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        onLogout();
+        return;
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      setMessages((prev) => [
+        ...prev,
+        { role: "ai", text: msg, who: modelLabel, error: true },
+      ]);
+    } finally {
+      setBusy(false);
+      inputRef.current?.focus();
+    }
+  }
+
+  async function rate(msg: Msg, rating: 1 | -1) {
+    if (!msg.id) return;
+    const id = msg.id;
+    setMessages((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, rating } : m)),
+    );
+    try {
+      await apiFetch(`/api/messages/${id}/rating`, { body: { rating } });
+    } catch {
+      // Rating is best-effort; the optimistic state stays.
+    }
+  }
+
+  return (
+    <div className="app wide">
+      <header className="top">
+        <button
+          className="menu-btn"
+          onClick={() => setSidebarOpen((o) => !o)}
+          aria-label="Toggle chat list"
+        >
+          ☰
+        </button>
+        <div className="logo">GNC</div>
+        <div>
+          <h1>
+            GNC <span>GROUND</span>
+          </h1>
+          <p>Chat Ground · all GNC models in one place</p>
+        </div>
+        <div className="user-box">
+          {me?.email && <span className="user-email">{me.email}</span>}
+          <button className="logout-btn" onClick={onLogout}>
+            Logout
+          </button>
+        </div>
+      </header>
+
+      <div className="chat-body">
+        <aside className={`sidebar${sidebarOpen ? " open" : ""}`}>
+          <button className="new-chat" onClick={newChat}>
+            + New chat
+          </button>
+          <div className="conv-list">
+            {conversations.length === 0 && (
+              <p className="conv-empty">
+                No chats yet.
+                <br />
+                Your conversations will appear here.
+              </p>
+            )}
+            {conversations.map((c) => (
+              <button
+                key={c.id}
+                className={`conv-item${c.id === activeId ? " active" : ""}`}
+                onClick={() => void openConversation(c)}
+              >
+                <span className="conv-title">{c.title || "Untitled chat"}</span>
+                <span className="conv-date">{timeAgo(c.updated_at)}</span>
+              </button>
+            ))}
+          </div>
+        </aside>
+
+        <section className="main-col">
+          <div className="model-row">
+            <label htmlFor="model">Model</label>
+            <select
+              id="model"
+              value={model}
+              onChange={(e) => setModel(e.target.value as ModelId)}
+            >
+              {MODELS.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="messages">
+            {messages.length === 0 && (
+              <p className="empty">
+                Pick a GNC model and say hello. GNC-1 is the flagship agent;
+                GNC-Flash is fast for everyday chat; GNC-Code is for coding.
+              </p>
+            )}
+            {messages.map((m, i) => (
+              <div
+                key={m.id ?? i}
+                className={`msg ${m.role}${m.error ? " error" : ""}`}
+              >
+                <div className="who">{m.who}</div>
+                {m.text}
+                {m.role === "ai" && m.id && !m.error && (
+                  <div className="rate-row">
+                    <button
+                      className={`rate-btn${m.rating === 1 ? " active" : ""}`}
+                      onClick={() => void rate(m, 1)}
+                      title="Good answer"
+                    >
+                      👍
+                    </button>
+                    <button
+                      className={`rate-btn${m.rating === -1 ? " active" : ""}`}
+                      onClick={() => void rate(m, -1)}
+                      title="Bad answer"
+                    >
+                      👎
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+            {busy && (
+              <div className="msg ai">
+                <div className="who">{modelLabel}</div>
+                Thinking…
+              </div>
+            )}
+          </div>
+
+          <div className="composer">
+            <input
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void send();
+              }}
+              placeholder="Ask GNC anything…"
+            />
+            <button
+              className="send"
+              onClick={() => void send()}
+              disabled={busy}
+            >
+              ↑
+            </button>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Root                                                                */
+/* ------------------------------------------------------------------ */
+
+export function App() {
+  const [token, setTokenState] = useState<string | null>(() => getToken());
+
+  const handleAuthed = useCallback((t: string) => {
+    setToken(t);
+    setTokenState(t);
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    clearToken();
+    setTokenState(null);
+  }, []);
+
+  if (!token) return <AuthScreen onAuthed={handleAuthed} />;
+  return <ChatScreen onLogout={handleLogout} />;
 }

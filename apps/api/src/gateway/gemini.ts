@@ -46,6 +46,9 @@ export function geminiAdapter(
       const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] =
         [];
       if (req.system) messages.push({ role: "system", content: req.system });
+      for (const turn of req.history ?? []) {
+        messages.push({ role: turn.role, content: turn.content });
+      }
       messages.push({ role: "user", content: req.message });
 
       const errors: string[] = [];

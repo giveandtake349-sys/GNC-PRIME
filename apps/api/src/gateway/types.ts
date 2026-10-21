@@ -20,9 +20,16 @@ export const GNC_MODELS: { id: GncModelId; label: string }[] = [
   { id: "gnc-lite", label: "GNC-Lite" },
 ];
 
+export interface ChatHistoryEntry {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export interface ChatRequest {
   message: string;
   system?: string;
+  /** Prior conversation turns, oldest first; the new `message` follows them. */
+  history?: ChatHistoryEntry[];
 }
 
 export interface ChatResult {
