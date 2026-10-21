@@ -1,10 +1,13 @@
-import { geminiAdapter, GEMINI_FLASH_MODEL } from "./gemini.js";
+import {
+  geminiAdapter,
+  GEMINI_MODEL_CHAIN,
+  GEMINI_LITE_CHAIN,
+} from "./gemini.js";
 import {
   zenAdapter,
   ZEN_BIG_PICKLE,
-  ZEN_LING_FLASH,
-  ZEN_MIMO,
-  ZEN_NEMOTRON_ULTRA,
+  ZEN_MIMO_FLASH,
+  ZEN_DEEPSEEK_FLASH,
   ZEN_NEMOTRON_LIGHTNING,
 } from "./zen.js";
 import type { ChatResult, EngineAdapter, GncModelId } from "./types.js";
@@ -21,30 +24,36 @@ const COOLDOWN_MS = 10 * 60_000;
 const cooldownUntil = new Map<string, number>();
 
 const ROUTES: Record<GncModelId, EngineAdapter[]> = {
-  // Blueprint: Gemini (best available) -> Nemotron Ultra -> Gemini Flash.
-  // Only the Flash Gemini adapter exists in this step, so: Gemini Flash ->
-  // Nemotron Ultra -> Nemotron Lightning.
+  // Engine reality (verified live 2026-10-22): Gemini is the only free
+  // engine reachable from a server — OpenCode gates its Zen free tier to
+  // the OpenCode app itself, so Zen adapters are trailing last-resorts
+  // only. Every GNC model is Gemini-first; the Gemini adapter itself walks
+  // a chain of model ids, so a retired id no longer breaks a route.
+  // GNC-Think and GNC-1 ask Gemini for deeper reasoning via
+  // reasoning_effort; GNC-Lite prefers the flash-lite ids.
   "gnc-1": [
-    geminiAdapter(GEMINI_FLASH_MODEL),
-    zenAdapter(ZEN_NEMOTRON_ULTRA),
+    geminiAdapter(GEMINI_MODEL_CHAIN, { reasoningEffort: "medium" }),
+    zenAdapter(ZEN_BIG_PICKLE),
     zenAdapter(ZEN_NEMOTRON_LIGHTNING),
   ],
   "gnc-flash": [
-    geminiAdapter(GEMINI_FLASH_MODEL),
-    zenAdapter(ZEN_LING_FLASH),
-    zenAdapter(ZEN_MIMO),
+    geminiAdapter(),
+    zenAdapter(ZEN_MIMO_FLASH),
+    zenAdapter(ZEN_DEEPSEEK_FLASH),
   ],
   "gnc-code": [
+    geminiAdapter(),
     zenAdapter(ZEN_BIG_PICKLE),
-    geminiAdapter(GEMINI_FLASH_MODEL),
+    zenAdapter(ZEN_DEEPSEEK_FLASH),
+  ],
+  "gnc-think": [
+    geminiAdapter(GEMINI_MODEL_CHAIN, { reasoningEffort: "high" }),
     zenAdapter(ZEN_NEMOTRON_LIGHTNING),
   ],
-  "gnc-think": [zenAdapter(ZEN_NEMOTRON_ULTRA), geminiAdapter(GEMINI_FLASH_MODEL)],
-  "gnc-vision": [geminiAdapter(GEMINI_FLASH_MODEL)],
+  "gnc-vision": [geminiAdapter()],
   "gnc-lite": [
-    zenAdapter(ZEN_MIMO),
-    zenAdapter(ZEN_LING_FLASH),
-    geminiAdapter(GEMINI_FLASH_MODEL),
+    geminiAdapter(GEMINI_LITE_CHAIN),
+    zenAdapter(ZEN_MIMO_FLASH),
   ],
 };
 
