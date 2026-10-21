@@ -449,6 +449,29 @@ header.top p {
   min-height: 0;
 }
 
+/* ---- Streaming replies (Step 4) ---- */
+
+.msg .typing {
+  color: var(--dim);
+  animation: typingPulse 1.1s ease-in-out infinite;
+}
+
+@keyframes typingPulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.partial-note {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: #ffb3b3;
+}
+
 /* ---- Message rating (Step 3) ---- */
 
 .rate-row {

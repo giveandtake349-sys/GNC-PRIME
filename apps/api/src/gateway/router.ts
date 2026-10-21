@@ -10,11 +10,14 @@ import {
   ZEN_DEEPSEEK_FLASH,
   ZEN_NEMOTRON_LIGHTNING,
 } from "./zen.js";
-import type {
-  ChatHistoryEntry,
-  ChatResult,
-  EngineAdapter,
-  GncModelId,
+import {
+  PartialStreamError,
+  StreamAbortedError,
+  type ChatHistoryEntry,
+  type ChatResult,
+  type EngineAdapter,
+  type GncModelId,
+  type TokenSink,
 } from "./types.js";
 
 // Fallback router — blueprint section 3.
@@ -124,6 +127,64 @@ export async function routeChat(
       // A timeout means "slow right now", not "broken" — do not bench the
       // engine for it, or one latency spike takes the whole route down.
       // Other failures (429 / 5xx / auth) get a short 60s cooldown.
+      if (!msg.startsWith("Timeout after")) {
+        cooldownUntil.set(adapter.id, Date.now() + COOLDOWN_MS);
+      }
+    }
+  }
+  throw new Error(`All engines failed for ${model} — ${errors.join(" | ")}`);
+}
+
+/**
+ * Streaming twin of routeChat: same route order and cooldown rules, but
+ * tokens are delivered to `onToken` as they arrive. Fallback to the next
+ * engine is only possible BEFORE the first token — once text has been
+ * shown to the user the reply can never restart on another engine:
+ * a mid-stream death propagates as PartialStreamError, and a consumer
+ * abort (sink returned false) as StreamAbortedError; neither is cooled
+ * down or retried. Engines without a streaming implementation fall back
+ * to their plain chat(), delivered as a single token.
+ */
+export async function routeChatStream(
+  model: GncModelId,
+  message: string,
+  opts: RouteChatOptions = {},
+  onToken: TokenSink,
+): Promise<ChatResult> {
+  const adapters = ROUTES[model];
+  if (!adapters) throw new Error(`Unknown GNC model: ${model as string}`);
+  let system = SYSTEM_PROMPTS[model];
+  if (opts.extraSystem) system = `${system}\n\n${opts.extraSystem}`;
+  const req = { message, system, history: opts.history };
+  const errors: string[] = [];
+
+  for (const adapter of adapters) {
+    const until = cooldownUntil.get(adapter.id) ?? 0;
+    if (Date.now() < until) {
+      errors.push(`${adapter.id}: in cooldown`);
+      continue;
+    }
+    try {
+      if (adapter.streamChat) {
+        return await adapter.streamChat(req, onToken);
+      }
+      const result = await withTimeout(
+        adapter.chat(req),
+        TIMEOUT_MS,
+        adapter.id,
+      );
+      onToken(result.reply);
+      return result;
+    } catch (err) {
+      if (
+        err instanceof PartialStreamError ||
+        err instanceof StreamAbortedError
+      ) {
+        throw err;
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`${adapter.id}: ${msg}`);
+      // Same cooldown rule as routeChat: timeouts never bench an engine.
       if (!msg.startsWith("Timeout after")) {
         cooldownUntil.set(adapter.id, Date.now() + COOLDOWN_MS);
       }

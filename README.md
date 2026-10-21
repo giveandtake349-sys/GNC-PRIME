@@ -40,5 +40,7 @@ pnpm --filter @gnc/web run check
   `GET /api/auth/me`. Chat and history (`/api/conversations`) require the
   Bearer token; signed-in chats persist to Neon with per-user memory
   (pgvector) and a daily free cap (`DAILY_MSG_CAP`; `OWNER_EMAIL` is exempt).
+- Chat also streams over SSE at `POST /api/chat/stream` (same auth, cap and
+  persistence as `/api/chat`; events: `token` / `done` / `error`).
 - The `DEV_AUTH=1` + `x-dev-user` bypass still exists for local dev, but is
   stateless: no DB, no history, no memory.

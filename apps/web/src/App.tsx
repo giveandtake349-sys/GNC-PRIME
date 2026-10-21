@@ -7,10 +7,12 @@ import {
 } from "react";
 import {
   ApiError,
+  StreamError,
   apiFetch,
   clearToken,
   getToken,
   setToken,
+  streamChat,
 } from "./api";
 
 const MODELS = [
@@ -61,11 +63,17 @@ interface ChatResponse {
 
 interface Msg {
   id?: string;
+  /** Local-only key for a message that has no server id (yet). */
+  tempId?: string;
   role: "me" | "ai";
   text: string;
   who?: string;
   error?: boolean;
   rating?: number | null;
+  /** True while this bubble is still receiving streamed tokens. */
+  streaming?: boolean;
+  /** True when the stream died mid-reply; the text shown was not saved. */
+  partial?: boolean;
 }
 
 function timeAgo(iso: string): string {
@@ -298,8 +306,26 @@ function ChatScreen({ onLogout }: { onLogout: () => void }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  // Incremented on every send and on every conversation switch, so a
+  // stream that finishes late can never write into another chat's view.
+  const sendSeqRef = useRef(0);
 
   const modelLabel = MODELS.find((m) => m.id === model)?.label ?? model;
+
+  /** Whether the message list is scrolled (nearly) to the newest content. */
+  const stickToBottom = useCallback(() => {
+    const el = messagesRef.current;
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    requestAnimationFrame(() => {
+      const el = messagesRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+  }, []);
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -336,6 +362,7 @@ function ChatScreen({ onLogout }: { onLogout: () => void }) {
   async function openConversation(conv: ConversationSummary) {
     setSidebarOpen(false);
     if (conv.id === activeId) return;
+    sendSeqRef.current += 1;
     setActiveId(conv.id);
     const convModel = MODELS.find((m) => m.id === conv.gnc_model);
     if (convModel) setModel(convModel.id);
@@ -369,6 +396,7 @@ function ChatScreen({ onLogout }: { onLogout: () => void }) {
   }
 
   function newChat() {
+    sendSeqRef.current += 1;
     setActiveId(null);
     setMessages([]);
     setSidebarOpen(false);
@@ -378,41 +406,103 @@ function ChatScreen({ onLogout }: { onLogout: () => void }) {
   async function send() {
     const text = input.trim();
     if (!text || busy) return;
+    const seq = (sendSeqRef.current += 1);
+    const tempId = `tmp-${seq}`;
+    const isCurrent = () => sendSeqRef.current === seq;
     setInput("");
     setBusy(true);
-    setMessages((prev) => [...prev, { role: "me", text, who: "You" }]);
+    // The assistant bubble appears immediately in a "typing" state and
+    // fills in token by token as the stream arrives.
+    setMessages((prev) => [
+      ...prev,
+      { role: "me", text, who: "You" },
+      {
+        role: "ai",
+        tempId,
+        text: "",
+        who: modelLabel,
+        rating: null,
+        streaming: true,
+      },
+    ]);
+    scrollToBottom();
+
+    const patchBubble = (patch: Partial<Msg>) => {
+      setMessages((prev) =>
+        prev.map((m) => (m.tempId === tempId ? { ...m, ...patch } : m)),
+      );
+    };
+    const adoptConversation = (conversationId: string | null) => {
+      if (!activeId && conversationId) setActiveId(conversationId);
+      void refreshConversations();
+    };
+
     try {
-      const data = await apiFetch<ChatResponse>("/api/chat", {
-        body: {
+      const done = await streamChat(
+        {
           model,
           message: text,
           ...(activeId ? { conversationId: activeId } : {}),
         },
-      });
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "ai",
-          id: data.assistantMessageId ?? undefined,
-          text: data.reply,
-          who: modelLabel,
-          rating: null,
+        (t) => {
+          if (!isCurrent()) return;
+          const stick = stickToBottom();
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.tempId === tempId ? { ...m, text: m.text + t } : m,
+            ),
+          );
+          if (stick) scrollToBottom();
         },
-      ]);
-      if (!activeId && data.conversationId) {
-        setActiveId(data.conversationId);
-      }
-      void refreshConversations();
+      );
+      if (!isCurrent()) return;
+      patchBubble({
+        id: done.assistantMessageId ?? undefined,
+        streaming: false,
+        rating: null,
+      });
+      adoptConversation(done.conversationId);
     } catch (err) {
+      if (!isCurrent()) return;
       if (err instanceof ApiError && err.status === 401) {
         onLogout();
         return;
       }
-      const msg = err instanceof Error ? err.message : String(err);
-      setMessages((prev) => [
-        ...prev,
-        { role: "ai", text: msg, who: modelLabel, error: true },
-      ]);
+      const streamErr = err instanceof StreamError ? err : null;
+      if (streamErr && (streamErr.partial || streamErr.tokensSeen > 0)) {
+        // Part of the reply is already on screen: keep it, flag it as cut
+        // off (it was not saved) and do NOT retry — a retry would
+        // duplicate the text.
+        patchBubble({ streaming: false, partial: true });
+      } else {
+        // Nothing was shown yet (HTTP failure or a stream that died
+        // before its first token): one fallback to the classic endpoint.
+        try {
+          const data = await apiFetch<ChatResponse>("/api/chat", {
+            body: {
+              model,
+              message: text,
+              ...(activeId ? { conversationId: activeId } : {}),
+            },
+          });
+          if (!isCurrent()) return;
+          patchBubble({
+            id: data.assistantMessageId ?? undefined,
+            text: data.reply,
+            streaming: false,
+            rating: null,
+          });
+          adoptConversation(data.conversationId);
+        } catch (err2) {
+          if (!isCurrent()) return;
+          if (err2 instanceof ApiError && err2.status === 401) {
+            onLogout();
+            return;
+          }
+          const msg = err2 instanceof Error ? err2.message : String(err2);
+          patchBubble({ text: msg, streaming: false, error: true });
+        }
+      }
     } finally {
       setBusy(false);
       inputRef.current?.focus();
@@ -499,7 +589,7 @@ function ChatScreen({ onLogout }: { onLogout: () => void }) {
             </select>
           </div>
 
-          <div className="messages">
+          <div className="messages" ref={messagesRef}>
             {messages.length === 0 && (
               <p className="empty">
                 Pick a GNC model and say hello. GNC-1 is the flagship agent;
@@ -508,11 +598,20 @@ function ChatScreen({ onLogout }: { onLogout: () => void }) {
             )}
             {messages.map((m, i) => (
               <div
-                key={m.id ?? i}
+                key={m.id ?? m.tempId ?? i}
                 className={`msg ${m.role}${m.error ? " error" : ""}`}
               >
                 <div className="who">{m.who}</div>
-                {m.text}
+                {m.streaming && !m.text ? (
+                  <span className="typing">Typing…</span>
+                ) : (
+                  m.text
+                )}
+                {m.partial && (
+                  <div className="partial-note">
+                    ⚠ Reply stopped early — it was not saved.
+                  </div>
+                )}
                 {m.role === "ai" && m.id && !m.error && (
                   <div className="rate-row">
                     <button
@@ -533,12 +632,6 @@ function ChatScreen({ onLogout }: { onLogout: () => void }) {
                 )}
               </div>
             ))}
-            {busy && (
-              <div className="msg ai">
-                <div className="who">{modelLabel}</div>
-                Thinking…
-              </div>
-            )}
           </div>
 
           <div className="composer">
