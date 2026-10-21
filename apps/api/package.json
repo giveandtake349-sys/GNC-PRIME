@@ -1,0 +1,1 @@
+{"dependencies":{"express":"^5.1.0","openai":"^5.0.0"},"devDependencies":{"@types/express":"^5.0.0","@types/node":"^22.0.0","tsx":"^4.19.0","typescript":"^5.9.0"},"name":"@gnc/api","private":true,"scripts":{"check":"tsc --noEmit","dev":"tsx watch src/index.ts","start":"tsx src/index.ts"},"type":"module","version":"0.1.0"}

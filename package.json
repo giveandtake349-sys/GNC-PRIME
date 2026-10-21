@@ -1,0 +1,1 @@
+{"name":"gnc-prime","packageManager":"pnpm@10.0.0","private":true,"scripts":{"check":"pnpm --filter @gnc/api run check && pnpm --filter @gnc/web run check","dev:api":"pnpm --filter @gnc/api run dev","dev:web":"pnpm --filter @gnc/web run dev"},"version":"0.1.0"}
