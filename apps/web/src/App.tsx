@@ -532,8 +532,8 @@ function ChatScreen({ onLogout }: { onLogout: () => void }) {
         >
           ☰
         </button>
-        <button className="new-chat-top" onClick={newChat}>
-          ✎ New Chat
+        <button className="new-chat-top" onClick={newChat} aria-label="New chat">
+          ✎
         </button>
       </header>
 
