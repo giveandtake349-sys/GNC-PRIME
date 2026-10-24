@@ -208,12 +208,12 @@ function AuthScreen({ onAuthed }: { onAuthed: (token: string) => void }) {
   return (
     <div className="app">
       <header className="top">
-        <div className="logo">GNC</div>
+        <img className="logo-img" src="/gnc-logo.webp" alt="GNC AI logo" />
         <div>
           <h1>
-            GNC <span>GROUND</span>
+            GNC <span>AI</span>
           </h1>
-          <p>Chat Ground · all GNC models in one place</p>
+          <p>Created by AstroX</p>
         </div>
       </header>
 
@@ -528,30 +528,42 @@ function ChatScreen({ onLogout }: { onLogout: () => void }) {
         <button
           className="menu-btn"
           onClick={() => setSidebarOpen((o) => !o)}
-          aria-label="Toggle chat list"
+          aria-label="Open menu"
         >
           ☰
         </button>
-        <div className="logo">GNC</div>
-        <div>
-          <h1>
-            GNC <span>GROUND</span>
-          </h1>
-          <p>Chat Ground · all GNC models in one place</p>
-        </div>
-        <div className="user-box">
-          {me?.email && <span className="user-email">{me.email}</span>}
-          <button className="logout-btn" onClick={onLogout}>
-            Logout
-          </button>
-        </div>
+        <button className="new-chat-top" onClick={newChat}>
+          ✎ New Chat
+        </button>
       </header>
 
       <div className="chat-body">
         <aside className={`sidebar${sidebarOpen ? " open" : ""}`}>
-          <button className="new-chat" onClick={newChat}>
-            + New chat
+          <button
+            className="menu-close"
+            onClick={() => setSidebarOpen(false)}
+            aria-label="Close menu"
+          >
+            × Close
           </button>
+          <button className="new-chat" onClick={newChat}>
+            + New Chat
+          </button>
+          <div className="menu-section">
+            <div className="menu-label">Model</div>
+            <select
+              id="model"
+              value={model}
+              onChange={(e) => setModel(e.target.value as ModelId)}
+            >
+              {MODELS.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="menu-label">History</div>
           <div className="conv-list">
             {conversations.length === 0 && (
               <p className="conv-empty">
@@ -571,30 +583,30 @@ function ChatScreen({ onLogout }: { onLogout: () => void }) {
               </button>
             ))}
           </div>
+          <div className="menu-section">
+            <div className="menu-label">Profile</div>
+            <p className="menu-text">{me?.email ?? ""}</p>
+            <p className="menu-text">
+              Plan: {me?.plan ?? ""} — daily message cap applies
+            </p>
+            <p className="menu-text">Created by AstroX</p>
+            <button className="logout-btn" onClick={onLogout}>
+              Logout
+            </button>
+          </div>
         </aside>
 
         <section className="main-col">
-          <div className="model-row">
-            <label htmlFor="model">Model</label>
-            <select
-              id="model"
-              value={model}
-              onChange={(e) => setModel(e.target.value as ModelId)}
-            >
-              {MODELS.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
           <div className="messages" ref={messagesRef}>
             {messages.length === 0 && (
-              <p className="empty">
-                Pick a GNC model and say hello. GNC-1 is the flagship agent;
-                GNC-Flash is fast for everyday chat; GNC-Code is for coding.
-              </p>
+              <div className="empty-hero">
+                <img
+                  className="hero-logo"
+                  src="/gnc-logo.webp"
+                  alt="GNC AI logo"
+                />
+                <p className="hero-text">Let&apos;s Do Something Together?</p>
+              </div>
             )}
             {messages.map((m, i) => (
               <div
@@ -609,7 +621,7 @@ function ChatScreen({ onLogout }: { onLogout: () => void }) {
                 )}
                 {m.partial && (
                   <div className="partial-note">
-                    ⚠ Reply stopped early — it was not saved.
+                    Reply stopped early — it was not saved.
                   </div>
                 )}
                 {m.role === "ai" && m.id && !m.error && (
@@ -619,14 +631,14 @@ function ChatScreen({ onLogout }: { onLogout: () => void }) {
                       onClick={() => void rate(m, 1)}
                       title="Good answer"
                     >
-                      👍
+                      Like
                     </button>
                     <button
                       className={`rate-btn${m.rating === -1 ? " active" : ""}`}
                       onClick={() => void rate(m, -1)}
                       title="Bad answer"
                     >
-                      👎
+                      Dislike
                     </button>
                   </div>
                 )}
