@@ -613,7 +613,7 @@ function ChatScreen({ onLogout }: { onLogout: () => void }) {
                 key={m.id ?? m.tempId ?? i}
                 className={`msg ${m.role}${m.error ? " error" : ""}`}
               >
-                <div className="who">{m.who}</div>
+                {m.role === "ai" && <div className="who">{m.who}</div>}
                 {m.streaming && !m.text ? (
                   <span className="typing">Typing…</span>
                 ) : (
