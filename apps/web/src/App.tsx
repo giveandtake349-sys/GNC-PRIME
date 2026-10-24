@@ -631,14 +631,14 @@ function ChatScreen({ onLogout }: { onLogout: () => void }) {
                       onClick={() => void rate(m, 1)}
                       title="Good answer"
                     >
-                      Like
+                      👍
                     </button>
                     <button
                       className={`rate-btn${m.rating === -1 ? " active" : ""}`}
                       onClick={() => void rate(m, -1)}
                       title="Bad answer"
                     >
-                      Dislike
+                      👎
                     </button>
                   </div>
                 )}
