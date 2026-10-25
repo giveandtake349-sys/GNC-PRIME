@@ -208,7 +208,7 @@ function AuthScreen({ onAuthed }: { onAuthed: (token: string) => void }) {
   return (
     <div className="app">
       <header className="top">
-        <img className="logo-img" src="/gnc-logo.webp" alt="GNC AI logo" />
+        <img className="logo-img" src="/gnc-logo.png" alt="GNC AI logo" />
         <div>
           <h1>
             GNC <span>AI</span>
@@ -602,7 +602,7 @@ function ChatScreen({ onLogout }: { onLogout: () => void }) {
               <div className="empty-hero">
                 <img
                   className="hero-logo"
-                  src="/gnc-logo.webp"
+                  src="/gnc-logo.png"
                   alt="GNC AI logo"
                 />
                 <p className="hero-text">Let&apos;s Do Something Together?</p>

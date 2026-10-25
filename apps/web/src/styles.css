@@ -1,9 +1,9 @@
 :root {
   /* GNC AI main colour — Grey Charcoal Dark (locked 2026-10-24) */
-  --bg: #3d3d3d;
-  --card: #2b2b2b;
-  --card2: #2b2b2b;
-  --line: #555555;
+  --bg: #151515;
+  --card: #2b2b29;
+  --card2: #2b2b29;
+  --line: #3a3a38;
   --txt: #f2f2f7;
   --dim: #b8b8b8;
   --gold: #f5c542;
